@@ -1,234 +1,134 @@
-# CLAUDE.md
+# OrcaSlicer — Bambu Cloud Build
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+> See also [AGENTS.md](AGENTS.md) for code style, key entry points, and critical constraints inherited from the upstream project.
 
-## Overview
+## What this is
 
-OrcaSlicer is an open-source 3D slicer application forked from Bambu Studio, built using C++ with wxWidgets for the GUI and CMake as the build system. The project uses a modular architecture with separate libraries for core slicing functionality, GUI components, and platform-specific code.
+A personal fork based on [FULU-Foundation/OrcaSlicer-bambulab](https://github.com/FULU-Foundation/OrcaSlicer-bambulab) (itself a repost of a now-removed repo), which adds full Bambu cloud networking support on top of [OrcaSlicer](https://github.com/SoftFever/OrcaSlicer). The goal is a portable Windows build that supports **full Bambu cloud capabilities** — including pushing custom filaments (not just profiles) up to the cloud so they land on the printer. This is functionality the stock OrcaSlicer build does not expose.
 
-## Build Commands
+The host machine is an Ubuntu 24.04 VM on Hyper-V with 16 GB RAM allocated. Target printer: **Bambu Lab P2S**.
 
-### Building on Windows
-**Always use this command to build the project when testing build issues on Windows.**
-```bash
-cmake --build . --config %build_type% --target ALL_BUILD -- -m
-```
+---
 
-### Building on macOS
-**Always use this command to build the project when testing build issues on macOS.**
-```bash
-cmake --build build/arm64 --config RelWithDebInfo --target all --
-```
+## Branch / Remote Structure
 
-### Building on Linux
- **Always use this command to build the project when testing build issues on Linux.**
-```bash
-cmake --build build/arm64 --config RelWithDebInfo --target all --
+| Name | What it is |
+|---|---|
+| `local/v2.4.2` | **Active working branch.** Always build from this. |
+| `origin` | User's fork: `https://github.com/dmuth23/Orca-Bambu` |
+| `origin/release/v2.4.2` | Remote counterpart of `local/v2.4.2` |
+| `upstream` | Official OrcaSlicer: `https://github.com/SoftFever/OrcaSlicer` |
+| `upstream/release/v2.4` | Upstream branch to monitor for new commits |
+| `fulu` | FULU Foundation repo: `https://github.com/FULU-Foundation/OrcaSlicer-bambulab` |
+| `fulu/main` | Base of our v2.4.2 branch |
 
-```
-### Build test:
+Never work on `main`. The old `release/v2.4` branch has the Claude-generated bridge (non-functional) — leave it alone.
 
-**Always use this command to build the project when testing build issues on Windows.**
-```bash
-cmake --build . --config %build_type% --target ALL_BUILD -- -m
-```
+**Note:** FULU's repo has no shared git history with upstream OrcaSlicer (it was created as a fresh snapshot). Upstream patches must be reviewed and applied manually via `git diff` + `git apply`.
 
-### Building on macOS
-**Always use this command to build the project when testing build issues on macOS.**
-```bash
-cmake --build build/arm64 --config RelWithDebInfo --target all --
-```
+---
 
-### Building on Linux
- **Always use this command to build the project when testing build issues on Linux.**
-```bash
-cmake --build build --config RelWithDebInfo --target all --
+## The Bambu Cloud Bridge
+
+The custom code lives in:
 
 ```
-
-
-### Build System
-- Uses CMake with minimum version 3.13 (maximum 3.31.x on Windows)
-- Primary build directory: `build/`
-- Dependencies are built in `deps/build/`
-- The build process is split into dependency building and main application building
-- Windows builds use Visual Studio generators
-- macOS builds use Xcode by default, Ninja with -x flag
-- Linux builds use Ninja generator
-
-### Testing
-Tests are located in the `tests/` directory and use the Catch2 testing framework. Test structure:
-- `tests/libslic3r/` - Core library tests (21 test files)
-  - Geometry processing, algorithms, file formats (STL, 3MF, AMF)
-  - Polygon operations, clipper utilities, Voronoi diagrams
-- `tests/fff_print/` - Fused Filament Fabrication tests (12 test files)
-  - Slicing algorithms, G-code generation, print mechanics
-  - Fill patterns, extrusion, support material
-- `tests/sla_print/` - Stereolithography tests (4 test files)
-  - SLA-specific printing algorithms, support generation
-- `tests/libnest2d/` - 2D nesting algorithm tests
-- `tests/slic3rutils/` - Utility function tests
-- `tests/sandboxes/` - Experimental/sandbox test code
-
-Run all tests after building:
-```bash
-cd build && ctest
+src/slic3r/Utils/PJarczakLinuxBridge/   — bridge shim (DLL/SO loaded by OrcaSlicer)
+shared/pjarczak_linux_plugin_bridge_core/ — core RPC protocol library
+shared/BambuBridge/                       — auth layer
 ```
 
-Run tests with verbose output:
+How it works:
+- On **Windows**: OrcaSlicer loads `pjarczak_bambu_networking_bridge.dll`, which spawns a WSL2 distro containing the Linux host binary. All Bambu cloud calls go over JSON-RPC to that host, which runs Bambu's real Linux `.so`.
+- On **Linux**: The host binary runs natively (opt-in via `PJARCZAK_BRIDGE_ENABLED=1`).
+- On **macOS**: Uses Lima VM instead of WSL2.
+
+**Windows requires WSL2.** On first launch, OrcaSlicer installs a small WSL2 distro automatically via a PowerShell script.
+
+Key files modified in core OrcaSlicer:
+- `src/slic3r/Utils/BBLNetworkPlugin.cpp` — loads the bridge instead of stock Bambu DLL
+- `src/slic3r/Utils/BBLCloudServiceAgent.cpp` — extended cloud agent
+- `src/slic3r/GUI/Plater.cpp` — bridge initialization
+
+**Golden rule: never let any merge overwrite anything in `PJarczakLinuxBridge/`, `shared/`, or the bridge hook points in `BBLNetworkPlugin.cpp`.**
+
+---
+
+## Building (Windows — primary target)
+
+Builds happen via **GitHub Actions**, not locally. Push to `release/v2.4.2` and the `build_windows_bridge.yml` workflow runs automatically.
+
+### What the Windows build does
+1. **Job 1 (Ubuntu):** Compiles the Linux host binary + WSL2 rootfs, uploads as artifacts
+2. **Job 2 (Windows):** Downloads Linux artifacts, builds OrcaSlicer with MSVC, packages as portable ZIP + installer
+
+### Triggering a build
 ```bash
-cd build && ctest --output-on-failure
+git push origin local/v2.4.2:release/v2.4.2
+```
+Then go to **github.com/dmuth23/Orca-Bambu/actions** and watch it run. Or trigger manually from the Actions tab.
+
+### Output
+Download `OrcaSlicer_Windows_V2.4.2_portable.zip` from the Actions artifacts. Extract anywhere and run.
+
+### Windows runtime requirement
+WSL2 must be enabled. On first OrcaSlicer launch, it will prompt to install the WSL2 runtime automatically. If WSL2 isn't enabled yet:
+```
+dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
+dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
+```
+Then restart Windows.
+
+---
+
+## Linux Build (optional / testing)
+
+```bash
+# First time only
+./build_linux.sh -u   # system packages
+./build_linux.sh -d   # C++ deps (30-60 min)
+
+# Regular rebuild
+./build_linux.sh -s -i -j 3
 ```
 
-Run individual test suites:
+Output: `build/OrcaSlicer_ubu64.AppImage`
+
+---
+
+## Upstream Update Workflow
+
+### Check for new upstream commits (read-only)
 ```bash
-# From build directory
-ctest --test-dir ./tests/libslic3r/libslic3r_tests
-ctest --test-dir ./tests/fff_print/fff_print_tests
-ctest --test-dir ./tests/sla_print/sla_print_tests
-# and so on
+./check-upstream.sh
 ```
 
-## Architecture
+### Apply upstream patches manually
+Since FULU has no shared git history with upstream, patches must be applied manually:
+```bash
+# See what changed in a specific upstream commit
+git show upstream/release/v2.4:<file>
 
-### Core Libraries
-- **libslic3r/**: Core slicing engine and algorithms (platform-independent)
-  - Main slicing logic, geometry processing, G-code generation
-  - Key classes: Print, PrintObject, Layer, GCode, Config
-  - Modular design with specialized subdirectories:
-    - `GCode/` - G-code generation, cooling, pressure equalization, thumbnails
-    - `Fill/` - Infill pattern implementations (gyroid, honeycomb, lightning, etc.)
-    - `Support/` - Tree supports and traditional support generation
-    - `Geometry/` - Advanced geometry operations, Voronoi diagrams, medial axis
-    - `Format/` - File I/O for 3MF, AMF, STL, OBJ, STEP formats
-    - `SLA/` - SLA-specific print processing and support generation
-    - `Arachne/` - Advanced wall generation using skeletal trapezoidation
+# Generate a patch and apply it
+git diff <base>..<commit> -- <file> | git apply
+```
 
-- **src/slic3r/**: Main application framework and GUI
-  - GUI application built with wxWidgets
-  - Integration between libslic3r core and user interface
-  - Located in `src/slic3r/GUI/` (not shown in this directory but exists)
+### Pushing to GitHub
+```bash
+git push origin local/v2.4.2:release/v2.4.2
+```
 
-### Key Algorithmic Components
-- **Arachne Wall Generation**: Variable-width perimeter generation using skeletal trapezoidation
-- **Tree Supports**: Organic support generation algorithm  
-- **Lightning Infill**: Sparse infill optimization for internal structures
-- **Adaptive Slicing**: Variable layer height based on geometry
-- **Multi-material**: Multi-extruder and soluble support processing
-- **G-code Post-processing**: Cooling, fan control, pressure advance, conflict checking
+---
 
-### File Format Support
-- **3MF/BBS_3MF**: Native format with extensions for multi-material and metadata
-- **STL**: Standard tessellation language for 3D models
-- **AMF**: Additive Manufacturing Format with color/material support  
-- **OBJ**: Wavefront OBJ with material definitions
-- **STEP**: CAD format support for precise geometry
-- **G-code**: Output format with extensive post-processing capabilities
+## Bambu Network Plugin
 
-### External Dependencies
-- **Clipper2**: Advanced 2D polygon clipping and offsetting
-- **libigl**: Computational geometry library for mesh operations
-- **TBB**: Intel Threading Building Blocks for parallelization
-- **wxWidgets**: Cross-platform GUI framework
-- **OpenGL**: 3D graphics rendering and visualization
-- **CGAL**: Computational Geometry Algorithms Library (selective use)
-- **OpenVDB**: Volumetric data structures for advanced operations
-- **Eigen**: Linear algebra library for mathematical operations
+OrcaSlicer downloads Bambu's proprietary network library automatically the first time you connect a printer. It lands in the OrcaSlicer data directory under `plugins/`. The bridge wraps this downloaded library to expose full cloud capabilities including custom filament sync.
 
-## File Organization
+---
 
-### Resources and Configuration
-- `resources/profiles/` - Printer and material profiles organized by manufacturer
-- `resources/printers/` - Printer-specific configurations and G-code templates  
-- `resources/images/` - UI icons, logos, calibration images
-- `resources/calib/` - Calibration test patterns and data
-- `resources/handy_models/` - Built-in test models (benchy, calibration cubes)
+## Hard Rules
 
-### Internationalization and Localization  
-- `localization/i18n/` - Source translation files (.pot, .po)
-- `resources/i18n/` - Runtime language resources
-- Translation managed via `scripts/run_gettext.sh` / `scripts/run_gettext.bat`
-
-### Platform-Specific Code
-- `src/libslic3r/Platform.cpp` - Platform abstractions and utilities
-- `src/libslic3r/MacUtils.mm` - macOS-specific utilities (Objective-C++)
-- Windows-specific build scripts and configurations
-- Linux distribution support scripts in `scripts/linux.d/`
-
-### Build and Development Tools
-- `cmake/modules/` - Custom CMake find modules and utilities
-- `scripts/` - Python utilities for profile generation and validation  
-- `tools/` - Windows build tools (gettext utilities)
-- `deps/` - External dependency build configurations
-
-## Development Workflow
-
-### Code Style and Standards
-- **C++17 standard** with selective C++20 features
-- **Naming conventions**: PascalCase for classes, snake_case for functions/variables
-- **Header guards**: Use `#pragma once` 
-- **Memory management**: Prefer smart pointers, RAII patterns
-- **Thread safety**: Use TBB for parallelization, be mindful of shared state
-
-### Common Development Tasks
-
-#### Adding New Print Settings
-1. Define setting in `PrintConfig.cpp` with proper bounds and defaults
-2. Add UI controls in appropriate GUI components  
-3. Update serialization in config save/load
-4. Add tooltips and help text for user guidance
-5. Test with different printer profiles
-
-#### Modifying Slicing Algorithms  
-1. Core algorithms live in `libslic3r/` subdirectories
-2. Performance-critical code should be profiled and optimized
-3. Consider multi-threading implications (TBB integration)
-4. Validate changes don't break existing profiles
-5. Add regression tests where appropriate
-
-#### GUI Development
-1. GUI code resides in `src/slic3r/GUI/` (not visible in current tree)
-2. Use existing wxWidgets patterns and custom controls
-3. Support both light and dark themes
-4. Consider DPI scaling on high-resolution displays
-5. Maintain cross-platform compatibility
-
-#### Adding Printer Support
-1. Create JSON profile in `resources/profiles/[manufacturer].json`
-2. Add printer-specific start/end G-code templates
-3. Configure build volume, capabilities, and material compatibility
-4. Test thoroughly with actual hardware when possible
-5. Follow existing profile structure and naming conventions
-
-### Dependencies and Build System
-- **CMake-based** with separate dependency building phase
-- **Dependencies** built once in `deps/build/`, then linked to main application  
-- **Cross-platform** considerations important for all changes
-- **Resource files** embedded at build time, platform-specific handling
-
-### Performance Considerations
-- **Slicing algorithms** are CPU-intensive, profile before optimizing
-- **Memory usage** can be substantial with complex models
-- **Multi-threading** extensively used via TBB
-- **File I/O** optimized for large 3MF files with embedded textures
-- **Real-time preview** requires efficient mesh processing
-
-## Important Development Notes
-
-### Codebase Navigation
-- Use search tools extensively - codebase has 500k+ lines
-- Key entry points: `src/OrcaSlicer.cpp` for application startup
-- Core slicing: `libslic3r/Print.cpp` orchestrates the slicing pipeline
-- Configuration: `PrintConfig.cpp` defines all print/printer/material settings
-
-### Compatibility and Stability
-- **Backward compatibility** maintained for project files and profiles
-- **Cross-platform** support essential (Windows/macOS/Linux)  
-- **File format** changes require careful version handling
-- **Profile migrations** needed when settings change significantly
-
-### Quality and Testing
-- **Regression testing** important due to algorithm complexity
-- **Performance benchmarks** help catch performance regressions
-- **Memory leak** detection important for long-running GUI application
-- **Cross-platform** testing required before releases
+- **No `git push --force`** under any circumstances
+- **No `git reset --hard`** without explicit user confirmation
+- **Never delete or overwrite** `src/slic3r/Utils/PJarczakLinuxBridge/` or `shared/`
+- **Never rebase** the working branch — merge only
