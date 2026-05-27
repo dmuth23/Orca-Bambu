@@ -632,6 +632,8 @@ set(SLIC3R_GUI_SOURCES
     Utils/BBLPrinterAgent.hpp
     Utils/BBLNetworkPlugin.cpp
     Utils/BBLNetworkPlugin.hpp
+    Utils/PJarczakLinuxBridge/PJarczakLinuxBridgeConfig.cpp
+    Utils/PJarczakLinuxBridge/PJarczakLinuxBridgeConfig.hpp
     Utils/Obico.cpp
     Utils/Obico.hpp
     Utils/OctoPrint.cpp
@@ -667,6 +669,7 @@ set(SLIC3R_GUI_SOURCES
 
 add_subdirectory(GUI/DeviceCore)
 add_subdirectory(GUI/DeviceTab)
+add_subdirectory(Utils/PJarczakLinuxBridge)
 
 if (WIN32)
     list(APPEND SLIC3R_GUI_SOURCES
